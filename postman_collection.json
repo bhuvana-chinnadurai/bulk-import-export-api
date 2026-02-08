@@ -1,0 +1,1071 @@
+{
+  "info": {
+    "name": "Bulk Import/Export API",
+    "description": "High-performance Go REST API for bulk importing and exporting articles, comments, and users in JSON/NDJSON/CSV formats.\n\n## Quick Start\n1. Run `docker-compose up -d` to start the API + PostgreSQL\n2. Set the `base_url` variable to `http://localhost:8080`\n3. Run requests in order: Health Check → Import Users → Check Status → Export\n\n## Test Data\nThe testdata/ directory contains files with intentional validation errors:\n- users_huge.csv (10,000 users)\n- articles_huge.ndjson (15,000 articles)\n- comments_huge.ndjson (20,000 comments)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "job_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health & Metrics",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Returns API health status. Use this to verify the server is running before testing other endpoints."
+          },
+          "response": [
+            {
+              "name": "Healthy",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"status\": \"healthy\",\n  \"timestamp\": \"2024-01-15T10:30:00Z\",\n  \"service\": \"bulk-import-export-api\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Database Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/metrics",
+              "host": ["{{base_url}}"],
+              "path": ["metrics"]
+            },
+            "description": "Returns record counts for each resource in the database. Useful to verify imports landed correctly."
+          },
+          "response": [
+            {
+              "name": "Metrics",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"database\": {\n    \"users\": 3233,\n    \"articles\": 11155,\n    \"comments\": 19105\n  },\n  \"timestamp\": \"2024-01-15T10:30:00Z\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Import - Users (CSV)",
+      "item": [
+        {
+          "name": "Import Users CSV",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.job_id) {",
+                  "    pm.collectionVariables.set('job_id', jsonData.job_id);",
+                  "    console.log('Saved job_id: ' + jsonData.job_id);",
+                  "}",
+                  "",
+                  "pm.test('Status code is 202 Accepted', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "pm.test('Response contains job_id', function () {",
+                  "    pm.expect(jsonData).to.have.property('job_id');",
+                  "});",
+                  "",
+                  "pm.test('Status is pending', function () {",
+                  "    pm.expect(jsonData.status).to.eql('pending');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "import-users-{{$timestamp}}",
+                "description": "Prevents duplicate processing. Same key returns existing job."
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Select testdata/users_huge.csv (10,000 users CSV with intentional validation errors)"
+                },
+                {
+                  "key": "resource",
+                  "value": "users",
+                  "type": "text",
+                  "description": "Resource type: users, articles, or comments"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/imports",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports"]
+            },
+            "description": "Upload the provided testdata/users_huge.csv (10,000 users with intentional errors).\n\nThe job_id is automatically saved to collection variables for subsequent requests.\n\n**Expected**: ~3,233 successful, ~6,767 failed (invalid emails, duplicate emails, missing IDs, invalid roles)"
+          },
+          "response": [
+            {
+              "name": "Job Created",
+              "status": "Accepted",
+              "code": 202,
+              "body": "{\n  \"job_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"status\": \"pending\",\n  \"resource\": \"users\",\n  \"message\": \"Import job created and queued for processing\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Check Users Import Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "",
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Job has expected fields', function () {",
+                  "    pm.expect(jsonData).to.have.property('status');",
+                  "    pm.expect(jsonData).to.have.property('total_records');",
+                  "    pm.expect(jsonData).to.have.property('successful_count');",
+                  "    pm.expect(jsonData).to.have.property('failed_count');",
+                  "});",
+                  "",
+                  "if (jsonData.status === 'completed') {",
+                  "    pm.test('Has validation errors (testdata has intentional errors)', function () {",
+                  "        pm.expect(jsonData.failed_count).to.be.above(0);",
+                  "    });",
+                  "    pm.test('Total = successful + failed', function () {",
+                  "        pm.expect(jsonData.successful_count + jsonData.failed_count).to.eql(jsonData.total_records);",
+                  "    });",
+                  "    pm.test('Error report URL provided', function () {",
+                  "        pm.expect(jsonData.error_report).to.include('/errors');",
+                  "    });",
+                  "    console.log('Import completed: ' + jsonData.successful_count + ' successful, ' + jsonData.failed_count + ' failed out of ' + jsonData.total_records);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/imports/{{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports", "{{job_id}}"]
+            },
+            "description": "Check the status of the users import job. Re-run this until status is 'completed'.\n\nThe response includes:\n- total_records, successful_count, failed_count\n- rows_per_sec, duration_ms (observability)\n- First 100 validation errors inline\n- error_report URL for full error download"
+          },
+          "response": [
+            {
+              "name": "Completed with Errors",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"status\": \"completed\",\n  \"resource\": \"users\",\n  \"total_records\": 10000,\n  \"processed_count\": 10000,\n  \"successful_count\": 3233,\n  \"failed_count\": 6767,\n  \"duration_ms\": 14,\n  \"rows_per_sec\": 567056,\n  \"error_report\": \"/v1/imports/550e8400-.../errors\",\n  \"errors\": [\n    {\n      \"line\": 2,\n      \"field\": \"id\",\n      \"message\": \"id is required\"\n    }\n  ],\n  \"error_count\": 6767\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Validation Errors (JSON)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/imports/{{job_id}}/errors",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports", "{{job_id}}", "errors"]
+            },
+            "description": "Get all validation errors for the import job as JSON.\n\nEach error includes: line number, field name, error message, and the invalid value."
+          },
+          "response": [
+            {
+              "name": "Validation Errors",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"job_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"error_count\": 7086,\n  \"errors\": [\n    {\n      \"line\": 2,\n      \"field\": \"id\",\n      \"message\": \"id is required\",\n      \"value\": \"\"\n    },\n    {\n      \"line\": 2,\n      \"field\": \"role\",\n      \"message\": \"invalid role, must be one of: admin, editor, viewer\",\n      \"value\": \"manager\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Download Error Report (CSV)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/imports/{{job_id}}/errors?format=csv",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports", "{{job_id}}", "errors"],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "csv"
+                }
+              ]
+            },
+            "description": "Download all validation errors as a CSV file.\n\nColumns: line, field, message, value\n\nUseful for sharing error reports with stakeholders or importing into spreadsheets."
+          },
+          "response": [
+            {
+              "name": "CSV Error Report",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "text/csv"
+                },
+                {
+                  "key": "Content-Disposition",
+                  "value": "attachment; filename=errors_550e8400-....csv"
+                }
+              ],
+              "body": "line,field,message,value\n2,id,id is required,\n2,role,\"invalid role, must be one of: admin, editor, viewer\",manager"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Import - Articles (NDJSON)",
+      "item": [
+        {
+          "name": "Import Articles NDJSON",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.job_id) {",
+                  "    pm.collectionVariables.set('job_id', jsonData.job_id);",
+                  "    console.log('Saved job_id: ' + jsonData.job_id);",
+                  "}",
+                  "",
+                  "pm.test('Status code is 202 Accepted', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "import-articles-{{$timestamp}}",
+                "description": "Prevents duplicate processing"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Select testdata/articles_huge.ndjson (15,000 articles NDJSON with intentional errors)"
+                },
+                {
+                  "key": "resource",
+                  "value": "articles",
+                  "type": "text",
+                  "description": "Resource type: users, articles, or comments"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/imports",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports"]
+            },
+            "description": "Upload testdata/articles_huge.ndjson (15,000 articles).\n\n**Expected**: ~11,155 successful, ~3,845 failed (invalid slugs, duplicate slugs, invalid author_id FKs, drafts with published_at)"
+          },
+          "response": [
+            {
+              "name": "Job Created",
+              "status": "Accepted",
+              "code": 202,
+              "body": "{\n  \"job_id\": \"660e8400-e29b-41d4-a716-446655440001\",\n  \"status\": \"pending\",\n  \"resource\": \"articles\",\n  \"message\": \"Import job created and queued for processing\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Check Articles Import Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "",
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "if (jsonData.status === 'completed') {",
+                  "    pm.test('Has validation errors', function () {",
+                  "        pm.expect(jsonData.failed_count).to.be.above(0);",
+                  "    });",
+                  "    console.log('Articles import: ' + jsonData.successful_count + ' successful, ' + jsonData.failed_count + ' failed');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/imports/{{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports", "{{job_id}}"]
+            },
+            "description": "Poll until status is 'completed'. Articles require FK validation against imported users."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Import - Comments (NDJSON)",
+      "item": [
+        {
+          "name": "Import Comments NDJSON",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.job_id) {",
+                  "    pm.collectionVariables.set('job_id', jsonData.job_id);",
+                  "    console.log('Saved job_id: ' + jsonData.job_id);",
+                  "}",
+                  "",
+                  "pm.test('Status code is 202 Accepted', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "import-comments-{{$timestamp}}",
+                "description": "Prevents duplicate processing"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Select testdata/comments_huge.ndjson (20,000 comments NDJSON with intentional errors)"
+                },
+                {
+                  "key": "resource",
+                  "value": "comments",
+                  "type": "text",
+                  "description": "Resource type: users, articles, or comments"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/imports",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports"]
+            },
+            "description": "Upload testdata/comments_huge.ndjson (20,000 comments).\n\n**Expected**: ~19,105 successful, ~895 failed (missing IDs, invalid article_id/user_id FKs, missing/empty body, overly long body)\n\n**Note**: Import users and articles first, since comments have FK references to both."
+          },
+          "response": [
+            {
+              "name": "Job Created",
+              "status": "Accepted",
+              "code": 202,
+              "body": "{\n  \"job_id\": \"770e8400-e29b-41d4-a716-446655440002\",\n  \"status\": \"pending\",\n  \"resource\": \"comments\",\n  \"message\": \"Import job created and queued for processing\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Check Comments Import Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "",
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "if (jsonData.status === 'completed') {",
+                  "    pm.test('Has validation errors', function () {",
+                  "        pm.expect(jsonData.failed_count).to.be.above(0);",
+                  "    });",
+                  "    console.log('Comments import: ' + jsonData.successful_count + ' successful, ' + jsonData.failed_count + ' failed');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/imports/{{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports", "{{job_id}}"]
+            },
+            "description": "Poll until status is 'completed'."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Export - Streaming",
+      "item": [
+        {
+          "name": "Export Users (NDJSON)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has content', function () {",
+                  "    pm.expect(pm.response.text().length).to.be.above(0);",
+                  "});",
+                  "",
+                  "// Count NDJSON lines",
+                  "var lines = pm.response.text().trim().split('\\n').filter(l => l.length > 0);",
+                  "console.log('Exported ' + lines.length + ' users as NDJSON');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/exports?resource=users&format=ndjson",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "exports"],
+              "query": [
+                {
+                  "key": "resource",
+                  "value": "users"
+                },
+                {
+                  "key": "format",
+                  "value": "ndjson"
+                }
+              ]
+            },
+            "description": "Stream all users as NDJSON (one JSON object per line).\n\nTarget: 5K+ rows/sec streaming throughput."
+          },
+          "response": []
+        },
+        {
+          "name": "Export Users (CSV)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/exports?resource=users&format=csv",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "exports"],
+              "query": [
+                {
+                  "key": "resource",
+                  "value": "users"
+                },
+                {
+                  "key": "format",
+                  "value": "csv"
+                }
+              ]
+            },
+            "description": "Stream all users as CSV. CSV export is only supported for users."
+          },
+          "response": []
+        },
+        {
+          "name": "Export Articles (NDJSON)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var lines = pm.response.text().trim().split('\\n').filter(l => l.length > 0);",
+                  "console.log('Exported ' + lines.length + ' articles as NDJSON');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/exports?resource=articles&format=ndjson",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "exports"],
+              "query": [
+                {
+                  "key": "resource",
+                  "value": "articles"
+                },
+                {
+                  "key": "format",
+                  "value": "ndjson"
+                }
+              ]
+            },
+            "description": "Stream all articles as NDJSON."
+          },
+          "response": []
+        },
+        {
+          "name": "Export Articles (JSON)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/exports?resource=articles&format=json",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "exports"],
+              "query": [
+                {
+                  "key": "resource",
+                  "value": "articles"
+                },
+                {
+                  "key": "format",
+                  "value": "json"
+                }
+              ]
+            },
+            "description": "Stream all articles as a JSON array."
+          },
+          "response": []
+        },
+        {
+          "name": "Export Comments (NDJSON)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var lines = pm.response.text().trim().split('\\n').filter(l => l.length > 0);",
+                  "console.log('Exported ' + lines.length + ' comments as NDJSON');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/exports?resource=comments&format=ndjson",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "exports"],
+              "query": [
+                {
+                  "key": "resource",
+                  "value": "comments"
+                },
+                {
+                  "key": "format",
+                  "value": "ndjson"
+                }
+              ]
+            },
+            "description": "Stream all comments as NDJSON."
+          },
+          "response": []
+        },
+        {
+          "name": "Export Comments (JSON)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/exports?resource=comments&format=json",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "exports"],
+              "query": [
+                {
+                  "key": "resource",
+                  "value": "comments"
+                },
+                {
+                  "key": "format",
+                  "value": "json"
+                }
+              ]
+            },
+            "description": "Stream all comments as a JSON array."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Export - Async",
+      "item": [
+        {
+          "name": "Create Async Export Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resource\": \"users\",\n  \"format\": \"json\",\n  \"filters\": {}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/exports",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "exports"]
+            },
+            "description": "Create an async export job. Currently redirects to the streaming endpoint."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Export Job Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/exports/{{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "exports", "{{job_id}}"]
+            },
+            "description": "Check the status of an export job by job_id."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Idempotency",
+      "item": [
+        {
+          "name": "Import with Idempotency Key (1st call)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.job_id) {",
+                  "    pm.collectionVariables.set('job_id', jsonData.job_id);",
+                  "}",
+                  "",
+                  "pm.test('Returns 202 Accepted', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "idempotency-test-fixed-key"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Select testdata/users_huge.csv"
+                },
+                {
+                  "key": "resource",
+                  "value": "users",
+                  "type": "text",
+                  "description": "Resource type"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/imports",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports"]
+            },
+            "description": "First call with a fixed idempotency key creates a new job."
+          },
+          "response": []
+        },
+        {
+          "name": "Import with Idempotency Key (2nd call - deduplicated)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 200 OK (existing job)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Returns same job_id', function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.id || jsonData.job_id).to.not.be.undefined;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "idempotency-test-fixed-key"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Select testdata/users_huge.csv"
+                },
+                {
+                  "key": "resource",
+                  "value": "users",
+                  "type": "text",
+                  "description": "Resource type"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/imports",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports"]
+            },
+            "description": "Second call with the SAME idempotency key returns the existing job (200 OK) instead of creating a duplicate."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Validation - Error Cases",
+      "item": [
+        {
+          "name": "Import Missing Resource",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 400 Bad Request', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test('Error message mentions resource', function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.error).to.include('resource');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "error-test-no-resource-{{$timestamp}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Select any testdata file"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/imports",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports"]
+            },
+            "description": "Attempt import without specifying resource type. Should return 400."
+          },
+          "response": []
+        },
+        {
+          "name": "Import Invalid Resource",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 400 Bad Request', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "error-test-invalid-resource-{{$timestamp}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Select any testdata file"
+                },
+                {
+                  "key": "resource",
+                  "value": "invalid_resource",
+                  "type": "text",
+                  "description": "Invalid resource type to trigger 400 error"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/imports",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports"]
+            },
+            "description": "Attempt import with invalid resource type. Should return 400."
+          },
+          "response": []
+        },
+        {
+          "name": "Import Wrong File Extension",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 400 Bad Request', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "error-test-wrong-ext-{{$timestamp}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "",
+                  "description": "Select testdata/articles_huge.ndjson (NDJSON file but claiming users to trigger format mismatch)"
+                },
+                {
+                  "key": "resource",
+                  "value": "users",
+                  "type": "text",
+                  "description": "Mismatched resource type (users expects CSV, not NDJSON)"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/imports",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports"]
+            },
+            "description": "Upload an NDJSON file for users import (requires CSV). Should return 400."
+          },
+          "response": []
+        },
+        {
+          "name": "Export Missing Resource",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 400 Bad Request', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/exports?format=ndjson",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "exports"],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "ndjson"
+                }
+              ]
+            },
+            "description": "Attempt export without specifying resource. Should return 400."
+          },
+          "response": []
+        },
+        {
+          "name": "Export Invalid Format",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 400 Bad Request', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/exports?resource=users&format=xml",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "exports"],
+              "query": [
+                {
+                  "key": "resource",
+                  "value": "users"
+                },
+                {
+                  "key": "format",
+                  "value": "xml"
+                }
+              ]
+            },
+            "description": "Attempt export with unsupported format. Should return 400."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Non-Existent Job",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 404 Not Found', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/imports/00000000-0000-0000-0000-000000000000",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "imports", "00000000-0000-0000-0000-000000000000"]
+            },
+            "description": "Attempt to get status of a non-existent job. Should return 404."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

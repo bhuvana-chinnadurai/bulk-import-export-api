@@ -1,0 +1,11 @@
+id,email,name,role,active,created_at
+550e8400-e29b-41d4-a716-446655440001,admin@example.com,Admin User,admin,true,2024-01-01T00:00:00Z
+550e8400-e29b-41d4-a716-446655440002,editor1@example.com,Editor One,editor,true,2024-01-01T00:00:00Z
+550e8400-e29b-41d4-a716-446655440003,editor2@example.com,Editor Two,editor,true,2024-01-02T00:00:00Z
+550e8400-e29b-41d4-a716-446655440004,viewer1@example.com,Viewer One,viewer,true,2024-01-02T00:00:00Z
+550e8400-e29b-41d4-a716-446655440005,viewer2@example.com,Viewer Two,viewer,true,2024-01-03T00:00:00Z
+550e8400-e29b-41d4-a716-446655440006,viewer3@example.com,Viewer Three,viewer,false,2024-01-03T00:00:00Z
+550e8400-e29b-41d4-a716-446655440007,john.doe@example.com,John Doe,editor,true,2024-01-04T00:00:00Z
+550e8400-e29b-41d4-a716-446655440008,jane.doe@example.com,Jane Doe,editor,true,2024-01-04T00:00:00Z
+550e8400-e29b-41d4-a716-446655440009,bob.smith@example.com,Bob Smith,viewer,true,2024-01-05T00:00:00Z
+550e8400-e29b-41d4-a716-446655440010,alice.jones@example.com,Alice Jones,viewer,true,2024-01-05T00:00:00Z
